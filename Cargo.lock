@@ -780,6 +780,8 @@ dependencies = [
 name = "tantivy-wasm-vfs"
 version = "0.1.0"
 dependencies = [
+ "backtrace",
+ "serde_json",
  "tantivy",
  "wasm-bindgen",
 ]

@@ -9,6 +9,8 @@ use tantivy::{
 };
 
 use wasm_bindgen::prelude::*;
+
+use crate::console_log;
 #[wasm_bindgen(raw_module = "../src/fetchdir")]
 extern "C" {
 
@@ -81,7 +83,6 @@ impl Directory for FetchDirectory {
 
     fn atomic_read(&self, path: &Path) -> Result<Vec<u8>, OpenReadError> {
         let f = self.get_file_handle(path)?;
-        let len = f.len();
         Ok(f.read_bytes(0, f.len())
             .map_err(|e| OpenReadError::wrap_io_error(e, path.to_path_buf()))?
             .to_vec())

@@ -1,3 +1,5 @@
+import * as stackParser from "error-stack-parser";
+
 function formatBytes(bytes: number, decimals = 2) {
   if (bytes === 0) return "0 Bytes";
 
@@ -15,7 +17,7 @@ export function get_file_len(url: string): number {
   console.log("GETLEN", url, formatBytes(file.length));
   return file.length;
 }
-const files = new Map<string, LazyUint8Array>();
+export const files = new Map<string, LazyUint8Array>();
 function getFile(url: string): LazyUint8Array {
   let file = files.get(url);
   if (!file) {
@@ -24,6 +26,7 @@ function getFile(url: string): LazyUint8Array {
         return { url, fromByte, toByte };
       },
       requestChunkSize: 4096,
+      logPageReads: true
     });
     files.set(url, file);
   }
@@ -68,9 +71,23 @@ export type PageReadLog = {
   wasCached: boolean;
   // how many pages were prefetched
   prefetch: number;
+  reason: string;
 };
 
 type ReadHead = { startChunk: number; speed: number };
+
+function getInterestingStack() {
+  const stack = stackParser.parse(new Error());
+  return stack
+    .filter((s) => s.fileName?.includes(".wasm"))
+    .map((s) => s.functionName)
+    .filter(
+      (fname) =>
+        fname?.includes("tantivy::") && !fname.includes("tantivy::directory")
+    )
+    .slice(0, 3)
+    .join("\n");
+}
 class LazyUint8Array {
   private serverChecked = false;
   private readonly chunks: Uint8Array[] = []; // Loaded chunks. Index is the chunk number
@@ -196,6 +213,7 @@ class LazyUint8Array {
         pageno: wantedChunkNum,
         wasCached,
         prefetch: wasCached ? 0 : this.readHeads[0].speed - 1,
+        reason: getInterestingStack()
       });
     }
     return this.chunks[wantedChunkNum];
@@ -261,12 +279,10 @@ class LazyUint8Array {
       toByte: to,
       url,
     } = this.rangeMapper(absoluteFrom, absoluteTo);
-
     console.log(
       `[xhr ${url} of size ${(absoluteTo + 1 - absoluteFrom) / 1024} KiB @ ${
         absoluteFrom / 1024
-      } KiB]`
-    );
+      } KiB]`);
 
     // TODO: Use mozResponseArrayBuffer, responseStream, etc. if available.
     var xhr = new XMLHttpRequest();
