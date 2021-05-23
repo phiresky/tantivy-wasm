@@ -30,7 +30,7 @@ self.addEventListener("message", async (event) => {
   const data = event.data as ToWorker;
   switch (data.type) {
     case "search":
-      const ret = JSON.parse(search(data.indexUrl, data.fields, data.searchText));
+      const ret = JSON.parse(search(data.indexUrl, data.fields, data.rank, data.searchText));
       sendMessage({
         type: "searchResult",
         result: ret,

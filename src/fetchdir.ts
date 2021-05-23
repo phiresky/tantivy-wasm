@@ -35,15 +35,13 @@ function getFile(url: string): LazyUint8Array {
 export function read_bytes_from_file(
   url: string,
   start: number,
-  end: number
-): Uint8Array {
+  end: number,
+  out: Uint8Array
+): void {
   const file = getFile(url);
   if (end - start > 1000)
     console.log("READ", url, formatBytes(start), start, end);
-
-  const arr = new Uint8Array(end - start);
-  file.copyInto(arr, 0, end - start, start);
-  return arr;
+  file.copyInto(out, 0, end - start, start);
 }
 
 export type RangeMapper = (

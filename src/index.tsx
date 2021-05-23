@@ -45,6 +45,7 @@ function Gui() {
       type: "search",
       indexUrl: "/tantivy-index-v2",
       searchText,
+      rank: true,
       fields: Object.entries(fields)
         .filter((f) => f[1])
         .map((f) => f[0]),
@@ -53,7 +54,6 @@ function Gui() {
   return (
     <div>
       <h1>Full Text Search in 2M books</h1>
-      
       Fields:{" "}
       <label>
         <input
@@ -79,12 +79,19 @@ function Gui() {
         />
         Text
       </label>
-      {isSearching? "Search running...": <div>
-        Input: <input
-        value={searchText}
-        onChange={(e) => setSearchText(e.target.value)}
-      />{" "}<button onClick={search}>Search</button>
-      </div>}
+      <div>{isSearching ? (
+        "Search running..."
+      ) : (
+        <>
+          Input:{" "}
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+          />{" "}
+          <button onClick={search}>Search</button>
+        </>
+      )}
+      </div>
       <div>
         Results:
         <table>

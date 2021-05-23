@@ -1,11 +1,6 @@
 use fetch_directory::FetchDirectory;
 use std::fmt::Write;
-use tantivy::{
-    collector::TopDocs,
-    query::QueryParser,
-    schema::{Field, FieldType},
-    Index,
-};
+use tantivy::{Index, collector::{DocSetCollector, TopDocs}, query::QueryParser, schema::{Field, FieldType}};
 use wasm_bindgen::prelude::*;
 
 mod fetch_directory;
@@ -38,6 +33,7 @@ pub struct Doc {
 pub fn search(
     directory: String,
     fields: Option<Box<[JsValue]>>,
+    rank: bool,
     query: String,
 ) -> Result<String, JsValue> {
     tantivy::set_info_log_hook(log);
@@ -48,12 +44,13 @@ pub fn search(
             .collect()
     });
     console_log!("field filter: {:?}", fields);
-    return search_inner(directory, fields.as_ref(), query)
+    return search_inner(directory, fields.as_ref(), rank, query)
         .map_err(|e| JsValue::from(format!("{:?}", e)));
 }
 pub fn search_inner(
     directory: String,
     fields: Option<&Vec<String>>,
+    rank: bool,
     query: String,
 ) -> tantivy::Result<String> {
     // let index = Index::open_in_dir(directory)?;
@@ -80,7 +77,10 @@ pub fn search_inner(
 
     let mut o = Vec::new();
 
-    for (score, doc_address) in searcher.search(&query, &TopDocs::with_limit(10))? {
+    let collector = TopDocs::with_limit(10); // DocSetCollectorj
+    for (score, doc_address) in searcher.search(&query, &collector)? {
+        console_log!("found document: {}:{}", doc_address.segment_ord(), doc_address.doc());
+        // let score = 1;
         let doc = searcher.doc(doc_address)?;
         // let doc: serde_json::Value = serde_json::value::to_value(schema.to_named_doc(&doc)).unwrap();
         let json: serde_json::Value = serde_json::json!({

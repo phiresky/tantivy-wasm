@@ -15,7 +15,7 @@ use crate::console_log;
 extern "C" {
 
     pub fn get_file_len(fname: String) -> f64;
-    pub fn read_bytes_from_file(fname: String, from: f64, to: f64) -> Vec<u8>;
+    pub fn read_bytes_from_file(fname: String, from: f64, to: f64, out: &mut [u8]);
 }
 
 #[derive(Clone, Debug)]
@@ -102,11 +102,14 @@ impl FileHandle for FetchFile {
         from: u64,
         to: u64,
     ) -> std::io::Result<tantivy::directory::OwnedBytes> {
-        Ok(OwnedBytes::new(read_bytes_from_file(
+        let mut out = vec![0u8; (to - from) as usize];
+        read_bytes_from_file(
             self.path.clone(),
             from as f64,
             to as f64,
-        )))
+            &mut out
+        );
+        Ok(OwnedBytes::new(out))
     }
 }
 impl HasLen for FetchFile {
