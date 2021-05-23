@@ -1,4 +1,12 @@
-use std::{convert::TryInto, io::{BufWriter, Write}, path::{Path, PathBuf}, u64};
+use std::{
+    collections::{BTreeMap, HashMap},
+    convert::TryInto,
+    io::{BufWriter, Write},
+    path::{Path, PathBuf},
+    sync::{Arc, RwLock},
+    u64,
+};
+use once_cell::sync::OnceCell;
 use tantivy::{
     directory::{
         error::{DeleteError, OpenReadError, OpenWriteError},
@@ -11,11 +19,17 @@ use tantivy::{
 use wasm_bindgen::prelude::*;
 
 use crate::console_log;
-#[wasm_bindgen(raw_module = "../src/fetchdir")]
+#[wasm_bindgen(raw_module = "../src/fetch_directory")]
 extern "C" {
 
     pub fn get_file_len(fname: String) -> f64;
-    pub fn read_bytes_from_file(fname: String, from: f64, to: f64, out: &mut [u8]);
+    pub fn read_bytes_from_file(
+        fname: String,
+        from: f64,
+        to: f64,
+        prefetch_hint: f64,
+        out: &mut [u8],
+    );
 }
 
 #[derive(Clone, Debug)]
@@ -28,37 +42,6 @@ impl FetchDirectory {
     }
 }
 
-struct Noop {}
-impl Write for Noop {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-impl TerminatingWrite for Noop {
-    fn terminate_ref(&mut self, _: AntiCallToken) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct FetchFile {
-    path: String,
-    len: u64,
-}
-impl FetchFile {
-    pub fn new(path: String) -> FetchFile {
-        let len = { get_file_len(path.clone()) } as u64;
-        FetchFile {
-            path: path,
-            len,
-            // cache: RwLock::new(BTreeMap::new()),
-        }
-    }
-}
 impl Directory for FetchDirectory {
     fn get_file_handle(&self, path: &Path) -> Result<Box<dyn FileHandle>, OpenReadError> {
         Ok(Box::new(FetchFile::new(format!(
@@ -96,13 +79,112 @@ impl Directory for FetchDirectory {
         Ok(WatchHandle::empty())
     }
 }
+
+struct Noop {}
+impl Write for Noop {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl TerminatingWrite for Noop {
+    fn terminate_ref(&mut self, _: AntiCallToken) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+type Ulen = u64;
+
+#[derive(Debug, Clone)]
+struct FetchFile {
+    path: String,
+    len: u64,
+    cache: Arc<RwLock<BTreeMap<Ulen, OwnedBytes>>>,
+}
+
+static fetch_files: OnceCell<RwLock<HashMap<String, FetchFile>>> = OnceCell::new();
+// chunk size
+const CS: u64 = 4096;
+impl FetchFile {
+    pub fn new(path: String) -> FetchFile {
+        fetch_files
+            .get_or_init(|| RwLock::new(HashMap::new()))
+            .write().unwrap()
+            .entry(path.clone())
+            .or_insert_with(|| {
+                let len = get_file_len(path.clone()) as u64;
+                FetchFile {
+                    path: path,
+                    len,
+                    cache: Arc::new(RwLock::new(BTreeMap::new())), // cache: RwLock::new(BTreeMap::new()),
+                }
+            }).clone()
+    }
+    fn read_chunk(&self, i: Ulen, prefetch_hint: Ulen) -> Vec<u8> {
+        let from = i * CS;
+        let to = std::cmp::min((i + 1) * CS, self.len());
+        let mut out = vec![0; (to - from) as usize];
+        read_bytes_from_file(
+            self.path.clone(),
+            from as f64,
+            to as f64,
+            (prefetch_hint * CS) as f64,
+            &mut out,
+        );
+        out
+    }
+}
 impl FileHandle for FetchFile {
-    fn read_bytes(
+    fn read_bytes(&self, from: Ulen, to: Ulen) -> std::io::Result<OwnedBytes> {
+        let len: usize = (to - from).try_into().unwrap();
+        /*eprintln!(
+            "GET {} @ {}, len {}",
+            self.path.to_string_lossy(),
+            from,
+            len
+        );*/
+        let starti = from / CS;
+        let endi = to / CS;
+        let startofs = (from % CS) as usize;
+        let endofs = (to % CS) as usize;
+        if starti == endi {
+            // only one chunk: we can directly return a reference to the cache as an Arc (in case it is deleted from cache), no need to copy!
+            let mut cache = self.cache.write().unwrap();
+            let chunk = cache
+                .entry(starti)
+                .or_insert_with(|| OwnedBytes::new(self.read_chunk(starti, 0)));
+            return Ok(chunk.slice(startofs, endofs));
+        }
+        let mut out_buf = vec![0u8; len];
+        //let toget = vec![];
+        let mut cache = self.cache.write().unwrap();
+        let mut written = 0;
+        for i in starti..=endi {
+            let startofs = if i == starti { startofs } else { 0 };
+            let endofs = if i == endi { endofs } else { CS as usize };
+            let chunk = cache
+                .entry(i)
+                .or_insert_with(|| OwnedBytes::new(self.read_chunk(i, endi - i)));
+            let chunk = &chunk[startofs..endofs];
+            let write_len = std::cmp::min(chunk.len(), len as usize);
+            out_buf[written..written + write_len].copy_from_slice(&chunk);
+            written += write_len;
+        }
+
+        Ok(OwnedBytes::new(out_buf))
+    }
+    /*  fn read_bytes(
         &self,
         from: u64,
         to: u64,
     ) -> std::io::Result<tantivy::directory::OwnedBytes> {
-        let mut out = vec![0u8; (to - from) as usize];
+
+        //let mut out = vec![0u8; (to - from) as usize];
+
+
         read_bytes_from_file(
             self.path.clone(),
             from as f64,
@@ -110,7 +192,7 @@ impl FileHandle for FetchFile {
             &mut out
         );
         Ok(OwnedBytes::new(out))
-    }
+    }*/
 }
 impl HasLen for FetchFile {
     fn len(&self) -> u64 {

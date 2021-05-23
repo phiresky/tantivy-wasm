@@ -1,20 +1,9 @@
 import * as stackParser from "error-stack-parser";
-
-function formatBytes(bytes: number, decimals = 2) {
-  if (bytes === 0) return "0 Bytes";
-
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
-
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
-}
+import { formatBytes } from "./util";
 
 export function get_file_len(url: string): number {
   const file = getFile(url);
-  console.log("GETLEN", url, formatBytes(file.length));
+  // console.log("GETLEN", url, formatBytes(file.length));
   return file.length;
 }
 export const files = new Map<string, LazyUint8Array>();
@@ -26,22 +15,34 @@ function getFile(url: string): LazyUint8Array {
         return { url, fromByte, toByte };
       },
       requestChunkSize: 4096,
-      logPageReads: true
+      logPageReads: true,
+      cacheRequestedChunk: false,
     });
     files.set(url, file);
   }
   return file;
 }
+function basename(url: string) {
+  return url.split("/").slice(-1)[0]
+}
 export function read_bytes_from_file(
   url: string,
   start: number,
   end: number,
+  prefetchHint: number,
   out: Uint8Array
 ): void {
   const file = getFile(url);
   if (end - start > 1000)
-    console.log("READ", url, formatBytes(start), start, end);
-  file.copyInto(out, 0, end - start, start);
+    console.log(
+      "READ",
+      basename(url),
+      "@" + formatBytes(start),
+      "len",
+      formatBytes(end - start),
+      "p", formatBytes(prefetchHint)
+    );
+  file.copyInto(out, 0, end - start, start, prefetchHint);
 }
 
 export type RangeMapper = (
@@ -62,6 +63,8 @@ export type LazyFileConfig = {
   maxReadSpeed?: number;
   /** if true, log all read pages into the `readPages` field for debugging */
   logPageReads?: boolean;
+  /** if false, only cache read ahead chunks. default true, only set to false if you have your own cache */
+  cacheRequestedChunk?: boolean;
 };
 export type PageReadLog = {
   pageno: number;
@@ -83,7 +86,7 @@ function getInterestingStack() {
       (fname) =>
         fname?.includes("tantivy::") && !fname.includes("tantivy::directory")
     )
-    .slice(0, 3)
+    .slice(0, 5)
     .join("\n");
 }
 class LazyUint8Array {
@@ -101,6 +104,7 @@ class LazyUint8Array {
   private readonly maxSpeed: number;
   private readonly maxReadHeads: number;
   private readonly logPageReads: boolean;
+  private readonly cacheRequestedChunk: boolean;
 
   constructor(config: LazyFileConfig) {
     this._chunkSize = config.requestChunkSize;
@@ -113,6 +117,7 @@ class LazyUint8Array {
     if (config.fileLength) {
       this._length = config.fileLength;
     }
+    this.cacheRequestedChunk = config.cacheRequestedChunk ?? true;
   }
   /**
    * efficiently copy the range [start, start + length) from the http file into the
@@ -123,19 +128,22 @@ class LazyUint8Array {
     buffer: Uint8Array,
     outOffset: number,
     length: number,
-    start: number
+    start: number,
+    prefetchHintBytes: number
   ): number {
     if (start >= this.length) return 0;
     length = Math.min(this.length - start, length);
     const end = start + length;
     let i = 0;
+    const prefetchHintChunks = (prefetchHintBytes / this.chunkSize) | 0;
+
     while (i < length) {
       // {idx: 24, chunkOffset: 24, chunkNum: 0, wantedSize: 16}
       const idx = start + i;
       const chunkOffset = idx % this.chunkSize;
       const chunkNum = (idx / this.chunkSize) | 0;
       const wantedSize = Math.min(this.chunkSize, end - idx);
-      let inChunk = this.getChunk(chunkNum);
+      let inChunk = this.getChunk(chunkNum, prefetchHintChunks + 1);
       if (chunkOffset !== 0 || wantedSize !== this.chunkSize) {
         inChunk = inChunk.subarray(chunkOffset, chunkOffset + wantedSize);
       }
@@ -174,14 +182,16 @@ class LazyUint8Array {
     return newHead;
   }
   /** get the given chunk from cache or fetch it from remote */
-  private getChunk(wantedChunkNum: number): Uint8Array {
+  private getChunk(wantedChunkNum: number, minSpeed: number): Uint8Array {
     let wasCached = true;
+    let wantedChunk;
+    let chunksToFetch;
     if (typeof this.chunks[wantedChunkNum] === "undefined") {
       wasCached = false;
       // double the fetching chunk size if the wanted chunk would be within the next fetch request
       const head = this.moveReadHead(wantedChunkNum);
 
-      const chunksToFetch = head.speed;
+      chunksToFetch = Math.max(minSpeed, head.speed);
       const startByte = head.startChunk * this.chunkSize;
       let endByte = (head.startChunk + chunksToFetch) * this.chunkSize - 1; // including this byte
       endByte = Math.min(endByte, this.length - 1); // if datalength-1 is selected, this is the last block
@@ -195,26 +205,29 @@ class LazyUint8Array {
             ? buf.byteLength - i * this.chunkSize
             : this.chunkSize;
         // console.log("constructing chunk", buf.byteLength, i * this.chunkSize, curSize);
-        this.chunks[curChunk] = new Uint8Array(
-          buf,
-          i * this.chunkSize,
-          curSize
-        );
+        const chunk = new Uint8Array(buf, i * this.chunkSize, curSize);
+        const isWantedChunk = curChunk === wantedChunkNum;
+        if (isWantedChunk) wantedChunk = chunk;
+        if (!isWantedChunk || this.cacheRequestedChunk) {
+          this.chunks[curChunk] = chunk;
+        }
       }
+    } else {
+      wantedChunk = this.chunks[wantedChunkNum];
+      if (!this.cacheRequestedChunk) delete this.chunks[wantedChunkNum];
     }
-    if (typeof this.chunks[wantedChunkNum] === "undefined")
-      throw new Error("doXHR failed (bug)!");
     const boring = !this.logPageReads || this.lastGet == wantedChunkNum;
     if (!boring) {
       this.lastGet = wantedChunkNum;
       this.readPages.push({
         pageno: wantedChunkNum,
         wasCached,
-        prefetch: wasCached ? 0 : this.readHeads[0].speed - 1,
-        reason: getInterestingStack()
+        prefetch: wasCached ? 0 : (chunksToFetch||0) - 1,
+        reason: wasCached ? "[no tracking when cached]" : getInterestingStack(),
       });
     }
-    return this.chunks[wantedChunkNum];
+    if (!wantedChunk) throw Error(`internal error: did not read wanted chunk?`);
+    return wantedChunk;
   }
   /** verify the server supports range requests and find out file length */
   private checkServer() {
@@ -278,9 +291,10 @@ class LazyUint8Array {
       url,
     } = this.rangeMapper(absoluteFrom, absoluteTo);
     console.log(
-      `[xhr ${url} of size ${(absoluteTo + 1 - absoluteFrom) / 1024} KiB @ ${
+      `[xhr ${basename(url)} of size ${formatBytes(absoluteTo + 1 - absoluteFrom)} @ ${
         absoluteFrom / 1024
-      } KiB]`);
+      } KiB]`
+    );
 
     // TODO: Use mozResponseArrayBuffer, responseStream, etc. if available.
     var xhr = new XMLHttpRequest();

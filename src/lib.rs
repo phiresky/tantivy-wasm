@@ -1,6 +1,7 @@
 use fetch_directory::FetchDirectory;
+use serde_json::json;
 use std::fmt::Write;
-use tantivy::{Index, collector::{DocSetCollector, TopDocs}, query::QueryParser, schema::{Field, FieldType}};
+use tantivy::{Index, SegmentReader, TantivyError, collector::{DocSetCollector, TopDocs}, postings::BlockSegmentPostings, query::QueryParser, schema::{Field, FieldType}};
 use wasm_bindgen::prelude::*;
 
 mod fetch_directory;
@@ -21,14 +22,9 @@ macro_rules! console_log {
     ($($t:tt)*) => (crate::log(&format_args!($($t)*).to_string()))
 }
 
-#[wasm_bindgen]
-pub struct Doc {
-    score: f64,
-    title: String,
-    authors: String,
-    filename: String,
+fn to_js_err(e: impl std::fmt::Debug) -> JsValue {
+    return JsValue::from(format!("{:?}", e));
 }
-
 #[wasm_bindgen]
 pub fn search(
     directory: String,
@@ -36,6 +32,7 @@ pub fn search(
     rank: bool,
     query: String,
 ) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
     tantivy::set_info_log_hook(log);
     let fields: Option<Vec<String>> = fields.map(|fields| {
         fields
@@ -44,8 +41,32 @@ pub fn search(
             .collect()
     });
     console_log!("field filter: {:?}", fields);
-    return search_inner(directory, fields.as_ref(), rank, query)
-        .map_err(|e| JsValue::from(format!("{:?}", e)));
+    return search_inner(directory, fields.as_ref(), rank, query).map_err(to_js_err);
+}
+#[wasm_bindgen]
+pub fn get_dataset_info(directory: String) -> Result<String, JsValue> {
+    get_dataset_info_inner(directory).map_err(to_js_err)
+}
+pub fn get_dataset_info_inner(directory: String) -> tantivy::Result<String> {
+    let index = Index::open(FetchDirectory::new(directory))?;
+    let schema = index.schema();
+    let reader = index.reader()?;
+    let searcher = reader.searcher();
+    // force it to cache some more data
+    for seg in index.searchable_segments()? {
+        let seg = SegmentReader::open(&seg)?;
+        for (field, _) in schema.fields() {
+            seg.inverted_index(field)?;
+        }
+    }
+    let space_usage = searcher.space_usage()?;
+
+    Ok(json!({
+        "schema": schema,
+        "space_usage": space_usage,
+        "field_ids": schema.fields().map(|f| (f.0.field_id(), f.1.name())).collect::<Vec<_>>()
+    })
+    .to_string())
 }
 pub fn search_inner(
     directory: String,
@@ -56,6 +77,7 @@ pub fn search_inner(
     // let index = Index::open_in_dir(directory)?;
     let index = Index::open(FetchDirectory::new(directory))?;
     let schema = index.schema();
+
     let default_fields: Vec<Field> = schema
         .fields()
         .filter(|&(_, ref field_entry)| match *field_entry.field_type() {
@@ -70,20 +92,33 @@ pub fn search_inner(
         })
         .map(|(field, _)| field)
         .collect();
-    let query_parser = QueryParser::new(schema.clone(), default_fields, index.tokenizers().clone());
+    let mut query_parser =
+        QueryParser::new(schema.clone(), default_fields, index.tokenizers().clone());
+    query_parser.set_conjunction_by_default();
+
     let query = query_parser.parse_query(&query)?;
     console_log!("parsed query: {:#?}", query);
     let searcher = index.reader()?.searcher();
 
     let mut o = Vec::new();
 
-    let collector = TopDocs::with_limit(10); // DocSetCollectorj
-    for (score, doc_address) in searcher.search(&query, &collector)? {
-        console_log!("found document: {}:{}", doc_address.segment_ord(), doc_address.doc());
+    let results = if rank {
+        searcher.search(&query, &TopDocs::with_limit(10))?
+    } else {
+        let x = searcher.search(&query, &DocSetCollector)?;
+        x.into_iter().map(|s| (0.0, s)).take(10).collect()
+    };
+
+    for (score, doc_address) in results {
+        console_log!(
+            "found document: {}:{}",
+            doc_address.segment_ord(),
+            doc_address.doc()
+        );
         // let score = 1;
         let doc = searcher.doc(doc_address)?;
         // let doc: serde_json::Value = serde_json::value::to_value(schema.to_named_doc(&doc)).unwrap();
-        let json: serde_json::Value = serde_json::json!({
+        let json: serde_json::Value = json!({
             "score": score,
             "doc": schema.to_named_doc(&doc)
         });
