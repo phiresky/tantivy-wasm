@@ -12,7 +12,10 @@ extern "C" {
     // `log(..)`
     #[wasm_bindgen(js_namespace = console)]
     fn log(s: &str);
-
+}
+#[wasm_bindgen(raw_module="../src/worker.ts")]
+extern "C" {
+    fn tantivyLog(s: &str);
 }
 
 #[macro_export]
@@ -33,7 +36,7 @@ pub fn search(
     query: String,
 ) -> Result<String, JsValue> {
     console_error_panic_hook::set_once();
-    tantivy::set_info_log_hook(log);
+    tantivy::set_info_log_hook(tantivyLog);
     let fields: Option<Vec<String>> = fields.map(|fields| {
         fields
             .into_iter()

@@ -4,10 +4,11 @@ import { render } from "react-dom";
 import { DatasetInfo, Doc, Stat } from "./types";
 import "./index.scss";
 import * as Comlink from "comlink";
-import type { Api } from "./worker";
+import type { Api, Progress } from "./worker";
 import { formatBytes } from "./util";
+import { SourceMapDevToolPlugin } from "webpack";
 
-function getWorker() {
+function getWorker(): [Worker, Promise<Comlink.Remote<Api>>] {
   const worker = new Worker(new URL("./worker.ts", import.meta.url));
   let resolve: () => void;
   const workerApiPromise = new Promise<void>((r) => (resolve = r));
@@ -19,29 +20,34 @@ function getWorker() {
     }
   }
   const workerApi = Comlink.wrap<Api>(worker);
-  return workerApiPromise.then(() => workerApi);
+  return [worker, workerApiPromise.then(() => workerApi)];
 }
-const workerApi = getWorker();
+const [worker, workerApi] = getWorker();
 
 const datasets = [
   {
     name: "LG Fiction Full text",
-    url: "/idxes/tantivy-index-v2",
+    url: "../idxes/tantivy-index-v2",
     desc: "2 million books (2TB of books)",
   },
   {
     name: "LG Proper (meta only)",
-    url: "/idxes/tantivy-index-lgonly",
+    url: "../idxes/tantivy-index-lgonly",
     desc: "LG (meta only)",
   },
   {
+    name: "LG Proper (meta only + phrase queries)",
+    url: "../idxes/tantivy-index-lgonly2",
+    desc: "LG (meta only)",
+  },
+  /* {
     name: "LG Proper (meta only) v2",
     url: "/idxes/tantivy-index-lgonlymin",
     desc: "LG (meta only) v2",
-  },
+  },*/
   {
     name: "Wikipedia EN",
-    url: "/idxes/tantivy-index-wikipedia",
+    url: "../idxes/tantivy-index-wikipedia",
     desc: "Wikipedia",
   },
 ];
@@ -79,7 +85,7 @@ function DatasetInformation({
           if (fieldId === undefined)
             return <li>field {field.name} not found</li>;
           return (
-            <li className="no-p-margin">
+            <li className="no-p-margin" key={fieldId}>
               <b>{field.name}</b> ({field.type}, Options:{" "}
               <code>{JSON.stringify(field.options)}</code>)<p>Space Usage:</p>
               <p>
@@ -102,12 +108,13 @@ function DatasetInformation({
           );
         })}
       </ul>
-      
     </div>
   );
 }
 function Gui() {
   const [rank, setRank] = useState(true);
+  const [progress, setProgress] = useState(0);
+  const [log, setLog] = useState([] as string[]);
   const [dataset, setDataset] = useState(datasets[0].url);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState(null as string | null);
@@ -124,22 +131,41 @@ function Gui() {
   useEffect(() => {
     setDatasetInfo(null);
     (async () => {
-      const s = await (await workerApi).getIndexStats(dataset);
-      console.log(s);
-      setDatasetInfo(s);
+      try {
+        const s = await (await workerApi).getIndexStats(dataset);
+        console.log(s);
+        setDatasetInfo(s);
+      } catch (e) {
+        console.error(e);
+        setError(e);
+      }
     })();
   }, [dataset]);
+  useEffect(() => {
+    function callback(e: MessageEvent) {
+      if (e.data && e.data.type === "progress") {
+        const p = e.data.data as Progress;
+        if (p.inc) setProgress(progress => progress + p.inc);
+        if (p.message) {
+          const msg = p.message;
+          setLog(log => [...log, msg]);
+        }
+      }
+    }
+    worker.addEventListener("message", callback);
+    return () => worker.removeEventListener("message", callback);
+  }, []);
 
   async function search() {
     setIsSearching(true);
     setSearchResult([]);
     setError(null);
     setStats([]);
+    setProgress(0);
     try {
+      const w = await workerApi;
       setSearchResult(
-        await (
-          await workerApi
-        ).search({
+        await w.search({
           indexUrl: dataset,
           searchText,
           rank,
@@ -156,7 +182,8 @@ function Gui() {
       setIsSearching(false);
     }
   }
-  const headers = searchResult.length > 0 ? Object.keys(searchResult[0].doc): [];
+  const headers =
+    searchResult.length > 0 ? Object.keys(searchResult[0].doc) : [];
   return (
     <div>
       <h1>
@@ -228,18 +255,28 @@ function Gui() {
           <thead>
             <tr>
               <th>Score</th>
-              {headers.map(h => <td key={h}>{h}</td>)}
+              {headers.map((h) => (
+                <td key={h}>{h}</td>
+              ))}
             </tr>
           </thead>
           <tbody>
             {searchResult.map((res, i) => (
               <tr key={i}>
                 <td>{res.score.toFixed(2)}</td>
-                {headers.map(h => <td key={h}>{res.doc[h as keyof typeof res.doc]}</td>)}
+                {headers.map((h) => (
+                  <td key={h}>{res.doc[h as keyof typeof res.doc]}</td>
+                ))}
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+      <div>
+        Log:{" "}
+        <pre ref={(p) => p && (p.scrollTop = p.scrollHeight)} style={{maxHeight: "200px", overflow: "auto"}}>
+          {log.join("\n")}
+        </pre>
       </div>
       <div>
         Fetch Stats:
@@ -256,7 +293,9 @@ function Gui() {
           <tbody>
             {stats.map((res) => (
               <tr key={res.reason}>
-                <td><pre>{res.reason}</pre></td>
+                <td>
+                  <pre>{res.reason}</pre>
+                </td>
                 <td>{res.requestCount}</td>
                 <td>{formatBytes(res.fetchedAmount)}</td>
                 <td>{res.totalReadCount}</td>

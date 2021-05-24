@@ -44,6 +44,16 @@ type SearchParams = {
   rank: boolean;
   searchText: string;
 };
+export type Progress = {
+  inc: number,
+  message?: string
+}
+export function tantivyLog(log: string) {
+  progressCallback({inc: 0, message: log})
+}
+export function progressCallback(p: Progress) {
+  self.postMessage({type: "progress", data: p});
+}
 const api = {
   search(data: SearchParams) {
     for(const file of files.values()) {

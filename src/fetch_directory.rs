@@ -1,12 +1,12 @@
+use once_cell::sync::OnceCell;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{hash_map::Entry, BTreeMap, HashMap},
     convert::TryInto,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
     u64,
 };
-use once_cell::sync::OnceCell;
 use tantivy::{
     directory::{
         error::{DeleteError, OpenReadError, OpenWriteError},
@@ -21,8 +21,8 @@ use wasm_bindgen::prelude::*;
 use crate::console_log;
 #[wasm_bindgen(raw_module = "../src/fetch_directory")]
 extern "C" {
-
-    pub fn get_file_len(fname: String) -> f64;
+    #[wasm_bindgen(catch)]
+    pub fn get_file_len(fname: String) -> Result<f64, JsValue>;
     pub fn read_bytes_from_file(
         fname: String,
         from: f64,
@@ -44,11 +44,11 @@ impl FetchDirectory {
 
 impl Directory for FetchDirectory {
     fn get_file_handle(&self, path: &Path) -> Result<Box<dyn FileHandle>, OpenReadError> {
-        Ok(Box::new(FetchFile::new(format!(
+        Ok(Box::new(FetchFile::get(format!(
             "{}/{}",
             self.root,
             path.to_string_lossy()
-        ))))
+        ))?))
     }
 
     fn delete(&self, path: &Path) -> Result<(), DeleteError> {
@@ -109,19 +109,28 @@ static fetch_files: OnceCell<RwLock<HashMap<String, FetchFile>>> = OnceCell::new
 // chunk size
 const CS: u64 = 4096;
 impl FetchFile {
-    pub fn new(path: String) -> FetchFile {
-        fetch_files
+    pub fn get(path: String) -> Result<FetchFile, OpenReadError> {
+        let mut cache = fetch_files
             .get_or_init(|| RwLock::new(HashMap::new()))
-            .write().unwrap()
-            .entry(path.clone())
-            .or_insert_with(|| {
-                let len = get_file_len(path.clone()) as u64;
-                FetchFile {
+            .write()
+            .unwrap();
+        let entry = cache.entry(path.clone());
+
+        Ok(match entry {
+            Entry::Occupied(e) => (*e.get()).clone(),
+            Entry::Vacant(v) => {
+                let len = get_file_len(path.clone())
+                    .map_err(|j| OpenReadError::FileDoesNotExist(PathBuf::from(&path)))?
+                    as u64;
+                let f = FetchFile {
                     path: path,
                     len,
                     cache: Arc::new(RwLock::new(BTreeMap::new())), // cache: RwLock::new(BTreeMap::new()),
-                }
-            }).clone()
+                };
+                v.insert(f.clone());
+                f
+            }
+        })
     }
     fn read_chunk(&self, i: Ulen, prefetch_hint: Ulen) -> Vec<u8> {
         let from = i * CS;

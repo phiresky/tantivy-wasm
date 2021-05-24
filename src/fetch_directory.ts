@@ -1,5 +1,6 @@
 import * as stackParser from "error-stack-parser";
 import { formatBytes } from "./util";
+import { progressCallback } from "./worker";
 
 export function get_file_len(url: string): number {
   const file = getFile(url);
@@ -33,7 +34,7 @@ export function read_bytes_from_file(
   out: Uint8Array
 ): void {
   const file = getFile(url);
-  if (end - start > 1000)
+  /*if (end - start > 1000)
     console.log(
       "READ",
       basename(url),
@@ -41,7 +42,7 @@ export function read_bytes_from_file(
       "len",
       formatBytes(end - start),
       "p", formatBytes(prefetchHint)
-    );
+    );*/
   file.copyInto(out, 0, end - start, start, prefetchHint);
 }
 
@@ -86,7 +87,7 @@ function getInterestingStack() {
       (fname) =>
         fname?.includes("tantivy::") && !fname.includes("tantivy::directory")
     )
-    .slice(0, 5)
+    .slice(0, 30)
     .join("\n");
 }
 class LazyUint8Array {
@@ -290,6 +291,7 @@ class LazyUint8Array {
       toByte: to,
       url,
     } = this.rangeMapper(absoluteFrom, absoluteTo);
+    progressCallback({inc: 1});
     console.log(
       `[xhr ${basename(url)} of size ${formatBytes(absoluteTo + 1 - absoluteFrom)} @ ${
         absoluteFrom / 1024
