@@ -12,6 +12,9 @@ module.exports = {
   mode: "development",
   output: {
     path: path.resolve(__dirname, "dist"),
+    filename: "[name].[contenthash].js",
+    chunkFilename: "[name].[contenthash].js",
+    assetModuleFilename: "[name].[contenthash][ext]",
   },
   experiments: {
     asyncWebAssembly: true,

@@ -1,6 +1,7 @@
 {
   "scripts": {
-    "dev": "webpack --watch"
+    "dev": "webpack --watch",
+    "build": "webpack --mode=production"
   },
   "dependencies": {
     "@types/error-stack-parser": "^2.0.0",

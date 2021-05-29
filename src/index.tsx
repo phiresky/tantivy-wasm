@@ -24,37 +24,18 @@ function getWorker(): [Worker, Promise<Comlink.Remote<Api>>] {
 }
 const [worker, workerApi] = getWorker();
 
+const datasetUrl = "../idxes";
 const datasets = [
   {
     name: "Wikipedia EN",
-    url: "../idxes/tantivy-index-wikipedia",
+    url: datasetUrl + "/tantivy-index-wikipedia",
     desc: "Wikipedia",
   },
-  /* {
-    name: "LG Fiction Full text",
-    url: "../idxes/tantivy-index-v2",
-    desc: "2 million books (2TB of books)",
-  },
-  {
-    name: "LG Proper (meta only)",
-    url: "../idxes/tantivy-index-lgonly",
-    desc: "LG (meta only)",
-  },
-  {
-    name: "LG Proper (meta only + phrase queries)",
-    url: "../idxes/tantivy-index-lgonly2",
-    desc: "LG (meta only)",
-  },*/
   {
     name: "OpenLibrary (30M books)",
-    url: "../idxes/tantivy-index-openlibrary",
+    url: datasetUrl + "/tantivy-index-openlibrary",
     desc: "OpenLibrary Metadata",
   },
-  /* {
-    name: "LG Proper (meta only) v2",
-    url: "/idxes/tantivy-index-lgonlymin",
-    desc: "LG (meta only) v2",
-  },*/
 ];
 function DatasetInformation({
   datasetInfo,
