@@ -1,14 +1,14 @@
 import * as stackParser from "error-stack-parser";
 import { formatBytes } from "./util";
-import { progressCallback, chunkSize } from "./worker";
+import { progressCallback } from "./worker";
 
-export function get_file_len(url: string): number {
-  const file = getFile(url);
+export function get_file_len(url: string, chunkSize: number): number {
+  const file = getFile(url, chunkSize);
   // console.log("GETLEN", url, formatBytes(file.length));
   return file.length;
 }
 export const files = new Map<string, LazyUint8Array>();
-function getFile(url: string): LazyUint8Array {
+function getFile(url: string, chunkSize: number): LazyUint8Array {
   let file = files.get(url);
   if (!file) {
     file = new LazyUint8Array({
@@ -17,7 +17,7 @@ function getFile(url: string): LazyUint8Array {
       },
       requestChunkSize: chunkSize,
       logPageReads: true,
-      cacheRequestedChunk: false,
+      cacheRequestedChunk: false
     });
     files.set(url, file);
   }
@@ -28,12 +28,13 @@ function basename(url: string) {
 }
 export function read_bytes_from_file(
   url: string,
+  chunkSize: number,
   start: number,
   end: number,
   prefetchHint: number,
   out: Uint8Array
 ): void {
-  const file = getFile(url);
+  const file = getFile(url, chunkSize);
   /*if (end - start > 1000)
     console.log(
       "READ",

@@ -6,7 +6,7 @@ import { get_dataset_info, search } from "../pkg";
 import { files } from "./fetch_directory";
 import { DatasetInfo, Stat } from "./types";
 
-export const chunkSize = 16384 * 2;
+console.log("S", location.search);
 function getReadStats(): Stat[] {
   const readByReason = new Map<string, Stat>();
   for (const [name, file] of files) {
@@ -44,6 +44,7 @@ type SearchParams = {
   fields?: string[];
   rank: boolean;
   searchText: string;
+  chunkSize: number;
 };
 export type Progress = {
   inc: number,
@@ -61,11 +62,11 @@ const api = {
       file.readPages = [];
     }
     return JSON.parse(
-      search(data.indexUrl, chunkSize, data.fields, data.rank, data.searchText)
+      search(data.indexUrl, data.chunkSize, data.fields, data.rank, data.searchText)
     );
   },
   getReadStats,
-  getIndexStats(indexUrl: string): DatasetInfo {
+  getIndexStats(indexUrl: string, chunkSize: number): DatasetInfo {
     return JSON.parse(get_dataset_info(indexUrl, chunkSize));
   },
 };

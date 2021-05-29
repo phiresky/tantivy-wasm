@@ -22,9 +22,10 @@ use crate::console_log;
 #[wasm_bindgen(raw_module = "../src/fetch_directory")]
 extern "C" {
     #[wasm_bindgen(catch)]
-    pub fn get_file_len(fname: String) -> Result<f64, JsValue>;
+    pub fn get_file_len(fname: String, chunkSize: f64) -> Result<f64, JsValue>;
     pub fn read_bytes_from_file(
         fname: String,
+        chunkSize: f64,
         from: f64,
         to: f64,
         prefetch_hint: f64,
@@ -116,10 +117,12 @@ impl FetchFile {
             .unwrap();
         let entry = cache.entry(path.clone());
 
+        let chunk_size = if path.ends_with(".store") { 16 * 1024 } else {chunk_size};
+
         Ok(match entry {
             Entry::Occupied(e) => (*e.get()).clone(),
             Entry::Vacant(v) => {
-                let len = get_file_len(path.clone())
+                let len = get_file_len(path.clone(), chunk_size as f64)
                     .map_err(|j| OpenReadError::FileDoesNotExist(PathBuf::from(&path)))?
                     as u64;
                 let f = FetchFile {
@@ -139,6 +142,7 @@ impl FetchFile {
         let mut out = vec![0; (to - from) as usize];
         read_bytes_from_file(
             self.path.clone(),
+            self.chunk_size as f64,
             from as f64,
             to as f64,
             (prefetch_hint * self.chunk_size) as f64,

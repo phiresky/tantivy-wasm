@@ -6,7 +6,6 @@ import "./index.scss";
 import * as Comlink from "comlink";
 import type { Api, Progress } from "./worker";
 import { formatBytes } from "./util";
-import { SourceMapDevToolPlugin } from "webpack";
 
 function getWorker(): [Worker, Promise<Comlink.Remote<Api>>] {
   const worker = new Worker(new URL("./worker.ts", import.meta.url));
@@ -24,6 +23,13 @@ function getWorker(): [Worker, Promise<Comlink.Remote<Api>>] {
 }
 const [worker, workerApi] = getWorker();
 
+const urlParams = new URLSearchParams(location.search);
+
+const chunkSize = 1024 * +(urlParams.get("chunkSize") || 32);
+
+
+console.log("chunkSize", chunkSize);
+
 const datasetUrl = "../idxes";
 const datasets = [
   {
@@ -35,8 +41,20 @@ const datasets = [
     name: "OpenLibrary (30M books)",
     url: datasetUrl + "/tantivy-index-openlibrary",
     desc: "OpenLibrary Metadata",
-  },
+  }
 ];
+
+const myDatasetUrl = urlParams.get("dataset");
+if (myDatasetUrl) {
+  const name = urlParams.get("datasetName") || myDatasetUrl;
+  datasets.unshift({
+    name,
+    desc: name,
+    url: myDatasetUrl
+  });
+}
+
+
 function DatasetInformation({
   datasetInfo,
 }: {
@@ -104,7 +122,7 @@ function Gui() {
   const [dataset, setDataset] = useState(datasets[0].url);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState(null as string | null);
-  const [searchText, setSearchText] = useState("horace slughorn");
+  const [searchText, setSearchText] = useState(urlParams.get("search") || "horace slughorn");
   const [searchResult, setSearchResult] = useState([] as Doc[]);
   const [stats, setStats] = useState([] as Stat[]);
   const [datasetInfo, setDatasetInfo] = useState(null as DatasetInfo | null);
@@ -118,7 +136,7 @@ function Gui() {
     setDatasetInfo(null);
     (async () => {
       try {
-        const s = await (await workerApi).getIndexStats(dataset);
+        const s = await (await workerApi).getIndexStats(dataset, chunkSize);
         console.log(s);
         setDatasetInfo(s);
       } catch (e) {
@@ -155,6 +173,7 @@ function Gui() {
           indexUrl: dataset,
           searchText,
           rank,
+          chunkSize,
           fields: Object.entries(fields)
             .filter((f) => f[1])
             .map((f) => f[0]),
