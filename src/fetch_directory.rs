@@ -35,20 +35,20 @@ extern "C" {
 #[derive(Clone, Debug)]
 pub struct FetchDirectory {
     root: String,
+    chunk_size: u64,
 }
 impl FetchDirectory {
-    pub fn new(root: String) -> FetchDirectory {
-        FetchDirectory { root }
+    pub fn new(root: String, chunk_size: u64) -> FetchDirectory {
+        FetchDirectory { root, chunk_size }
     }
 }
 
 impl Directory for FetchDirectory {
     fn get_file_handle(&self, path: &Path) -> Result<Box<dyn FileHandle>, OpenReadError> {
-        Ok(Box::new(FetchFile::get(format!(
-            "{}/{}",
-            self.root,
-            path.to_string_lossy()
-        ))?))
+        Ok(Box::new(FetchFile::get(
+            format!("{}/{}", self.root, path.to_string_lossy()),
+            self.chunk_size,
+        )?))
     }
 
     fn delete(&self, path: &Path) -> Result<(), DeleteError> {
@@ -100,6 +100,7 @@ type Ulen = u64;
 
 #[derive(Debug, Clone)]
 struct FetchFile {
+    chunk_size: u64,
     path: String,
     len: u64,
     cache: Arc<RwLock<BTreeMap<Ulen, OwnedBytes>>>,
@@ -107,9 +108,8 @@ struct FetchFile {
 
 static fetch_files: OnceCell<RwLock<HashMap<String, FetchFile>>> = OnceCell::new();
 // chunk size
-const CS: u64 = 4096;
 impl FetchFile {
-    pub fn get(path: String) -> Result<FetchFile, OpenReadError> {
+    pub fn get(path: String, chunk_size: u64) -> Result<FetchFile, OpenReadError> {
         let mut cache = fetch_files
             .get_or_init(|| RwLock::new(HashMap::new()))
             .write()
@@ -125,6 +125,7 @@ impl FetchFile {
                 let f = FetchFile {
                     path: path,
                     len,
+                    chunk_size,
                     cache: Arc::new(RwLock::new(BTreeMap::new())), // cache: RwLock::new(BTreeMap::new()),
                 };
                 v.insert(f.clone());
@@ -133,14 +134,14 @@ impl FetchFile {
         })
     }
     fn read_chunk(&self, i: Ulen, prefetch_hint: Ulen) -> Vec<u8> {
-        let from = i * CS;
-        let to = std::cmp::min((i + 1) * CS, self.len());
+        let from = i * self.chunk_size;
+        let to = std::cmp::min((i + 1) * self.chunk_size, self.len());
         let mut out = vec![0; (to - from) as usize];
         read_bytes_from_file(
             self.path.clone(),
             from as f64,
             to as f64,
-            (prefetch_hint * CS) as f64,
+            (prefetch_hint * self.chunk_size) as f64,
             &mut out,
         );
         out
@@ -155,6 +156,7 @@ impl FileHandle for FetchFile {
             from,
             len
         );*/
+        let CS = self.chunk_size;
         let starti = from / CS;
         let endi = to / CS;
         let startofs = (from % CS) as usize;

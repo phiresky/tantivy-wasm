@@ -31,6 +31,7 @@ fn to_js_err(e: impl std::fmt::Debug) -> JsValue {
 #[wasm_bindgen]
 pub fn search(
     directory: String,
+    chunk_size: u32,
     fields: Option<Box<[JsValue]>>,
     rank: bool,
     query: String,
@@ -44,14 +45,14 @@ pub fn search(
             .collect()
     });
     console_log!("field filter: {:?}", fields);
-    return search_inner(directory, fields.as_ref(), rank, query).map_err(to_js_err);
+    return search_inner(directory, chunk_size as u64, fields.as_ref(), rank, query).map_err(to_js_err);
 }
 #[wasm_bindgen]
-pub fn get_dataset_info(directory: String) -> Result<String, JsValue> {
-    get_dataset_info_inner(directory).map_err(to_js_err)
+pub fn get_dataset_info(directory: String, chunk_size: u32) -> Result<String, JsValue> {
+    get_dataset_info_inner(directory, chunk_size as u64).map_err(to_js_err)
 }
-pub fn get_dataset_info_inner(directory: String) -> tantivy::Result<String> {
-    let index = Index::open(FetchDirectory::new(directory))?;
+pub fn get_dataset_info_inner(directory: String, chunk_size: u64) -> tantivy::Result<String> {
+    let index = Index::open(FetchDirectory::new(directory, chunk_size))?;
     let schema = index.schema();
     let reader = index.reader()?;
     let searcher = reader.searcher();
@@ -73,12 +74,13 @@ pub fn get_dataset_info_inner(directory: String) -> tantivy::Result<String> {
 }
 pub fn search_inner(
     directory: String,
+    chunk_size: u64,
     fields: Option<&Vec<String>>,
     rank: bool,
     query: String,
 ) -> tantivy::Result<String> {
     // let index = Index::open_in_dir(directory)?;
-    let index = Index::open(FetchDirectory::new(directory))?;
+    let index = Index::open(FetchDirectory::new(directory, chunk_size))?;
     let schema = index.schema();
 
     let default_fields: Vec<Field> = schema

@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "dev": "webpack --watch"
+  },
   "dependencies": {
     "@types/error-stack-parser": "^2.0.0",
     "@types/react": "^17.0.6",

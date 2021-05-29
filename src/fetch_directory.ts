@@ -1,6 +1,6 @@
 import * as stackParser from "error-stack-parser";
 import { formatBytes } from "./util";
-import { progressCallback } from "./worker";
+import { progressCallback, chunkSize } from "./worker";
 
 export function get_file_len(url: string): number {
   const file = getFile(url);
@@ -15,7 +15,7 @@ function getFile(url: string): LazyUint8Array {
       rangeMapper(fromByte, toByte) {
         return { url, fromByte, toByte };
       },
-      requestChunkSize: 4096,
+      requestChunkSize: chunkSize,
       logPageReads: true,
       cacheRequestedChunk: false,
     });

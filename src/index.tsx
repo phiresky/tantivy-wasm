@@ -40,6 +40,11 @@ const datasets = [
     url: "../idxes/tantivy-index-lgonly2",
     desc: "LG (meta only)",
   },
+  {
+    name: "OpenLibrary (30M books)",
+    url: "../idxes/tantivy-index-openlibrary",
+    desc: "OpenLibrary",
+  },
   /* {
     name: "LG Proper (meta only) v2",
     url: "/idxes/tantivy-index-lgonlymin",

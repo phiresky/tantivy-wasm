@@ -6,6 +6,7 @@ import { get_dataset_info, search } from "../pkg";
 import { files } from "./fetch_directory";
 import { DatasetInfo, Stat } from "./types";
 
+export const chunkSize = 16384 * 2;
 function getReadStats(): Stat[] {
   const readByReason = new Map<string, Stat>();
   for (const [name, file] of files) {
@@ -60,12 +61,12 @@ const api = {
       file.readPages = [];
     }
     return JSON.parse(
-      search(data.indexUrl, data.fields, data.rank, data.searchText)
+      search(data.indexUrl, chunkSize, data.fields, data.rank, data.searchText)
     );
   },
   getReadStats,
   getIndexStats(indexUrl: string): DatasetInfo {
-    return JSON.parse(get_dataset_info(indexUrl));
+    return JSON.parse(get_dataset_info(indexUrl, chunkSize));
   },
 };
 export type Api = typeof api;
