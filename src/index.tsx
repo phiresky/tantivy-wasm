@@ -26,6 +26,11 @@ const [worker, workerApi] = getWorker();
 
 const datasets = [
   {
+    name: "Wikipedia EN",
+    url: "../idxes/tantivy-index-wikipedia",
+    desc: "Wikipedia",
+  },
+  /* {
     name: "LG Fiction Full text",
     url: "../idxes/tantivy-index-v2",
     desc: "2 million books (2TB of books)",
@@ -39,22 +44,17 @@ const datasets = [
     name: "LG Proper (meta only + phrase queries)",
     url: "../idxes/tantivy-index-lgonly2",
     desc: "LG (meta only)",
-  },
+  },*/
   {
     name: "OpenLibrary (30M books)",
     url: "../idxes/tantivy-index-openlibrary",
-    desc: "OpenLibrary",
+    desc: "OpenLibrary Metadata",
   },
   /* {
     name: "LG Proper (meta only) v2",
     url: "/idxes/tantivy-index-lgonlymin",
     desc: "LG (meta only) v2",
   },*/
-  {
-    name: "Wikipedia EN",
-    url: "../idxes/tantivy-index-wikipedia",
-    desc: "Wikipedia",
-  },
 ];
 function DatasetInformation({
   datasetInfo,
@@ -117,13 +117,13 @@ function DatasetInformation({
   );
 }
 function Gui() {
-  const [rank, setRank] = useState(true);
+  const [rank, setRank] = useState(false);
   const [progress, setProgress] = useState(0);
   const [log, setLog] = useState([] as string[]);
   const [dataset, setDataset] = useState(datasets[0].url);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState(null as string | null);
-  const [searchText, setSearchText] = useState("dumbledore said calmly");
+  const [searchText, setSearchText] = useState("horace slughorn");
   const [searchResult, setSearchResult] = useState([] as Doc[]);
   const [stats, setStats] = useState([] as Stat[]);
   const [datasetInfo, setDatasetInfo] = useState(null as DatasetInfo | null);
@@ -150,10 +150,10 @@ function Gui() {
     function callback(e: MessageEvent) {
       if (e.data && e.data.type === "progress") {
         const p = e.data.data as Progress;
-        if (p.inc) setProgress(progress => progress + p.inc);
+        if (p.inc) setProgress((progress) => progress + p.inc);
         if (p.message) {
           const msg = p.message;
-          setLog(log => [...log, msg]);
+          setLog((log) => [...log, msg]);
         }
       }
     }
@@ -279,7 +279,10 @@ function Gui() {
       </div>
       <div>
         Log:{" "}
-        <pre ref={(p) => p && (p.scrollTop = p.scrollHeight)} style={{maxHeight: "200px", overflow: "auto"}}>
+        <pre
+          ref={(p) => p && (p.scrollTop = p.scrollHeight)}
+          style={{ maxHeight: "200px", overflow: "auto" }}
+        >
           {log.join("\n")}
         </pre>
       </div>
