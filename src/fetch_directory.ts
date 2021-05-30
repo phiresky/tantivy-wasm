@@ -3,9 +3,14 @@ import { formatBytes } from "./util";
 import { progressCallback } from "./worker";
 
 export function get_file_len(url: string, chunkSize: number): number {
-  const file = getFile(url, chunkSize);
-  // console.log("GETLEN", url, formatBytes(file.length));
-  return file.length;
+  try {
+    const file = getFile(url, chunkSize);
+    // console.log("GETLEN", url, formatBytes(file.length));
+    return file.length;
+  } catch (e) {
+    console.error("get_file_len", e);
+    throw e;
+  }
 }
 export const files = new Map<string, LazyUint8Array>();
 function getFile(url: string, chunkSize: number): LazyUint8Array {
@@ -21,6 +26,7 @@ function getFile(url: string, chunkSize: number): LazyUint8Array {
     });
     files.set(url, file);
   }
+  if (file.chunkSize !== chunkSize) throw Error(`Wrong chunk size`);
   return file;
 }
 function basename(url: string) {
@@ -227,9 +233,6 @@ class LazyUint8Array {
     return newHead;
   }
   ensureChunksCached(_chunkIds: number[]) {
-    const chunkIds = _chunkIds
-      .filter((c) => typeof this.chunks[c] === "undefined")
-      .sort();
     if (this.logPageReads) {
       for (const cid of _chunkIds) {
         if (typeof this.chunks[cid] !== "undefined") {
@@ -242,7 +245,13 @@ class LazyUint8Array {
         }
       }
     }
-    this.fetchChunks(chunkIds);
+    const chunkIds = new Set(
+      _chunkIds
+        .filter((c) => typeof this.chunks[c] === "undefined")
+        .sort((a, b) => a - b)
+    );
+    console.log("ensureCached", chunkIds);
+    this.fetchChunks([...chunkIds]);
   }
 
   // input: sorted list of chunk ids
@@ -267,26 +276,33 @@ class LazyUint8Array {
       bytes: [number, number];
       lastChunkSize: number;
     }[] = [];
-    for (const [startChunk, endChunk] of wantedChunkRanges) {
-      const minSpeed = endChunk - startChunk + 1;
-      const head = this.moveReadHead(startChunk);
-      const chunksToFetch = Math.max(minSpeed, head.speed);
-      const startByte = head.startChunk * this.chunkSize;
-      const wouldEndByte =
-        (head.startChunk + chunksToFetch) * this.chunkSize - 1; // including this byte
+    for (const [wantedStartChunk, wantedEndChunk] of wantedChunkRanges) {
+      const head = this.moveReadHead(wantedStartChunk);
+      const newStartChunk = head.startChunk;
+      const newEndChunk = Math.max(
+        newStartChunk + head.speed - 1,
+        wantedEndChunk
+      );
+      const startByte = newStartChunk * this.chunkSize;
+      const wouldEndByte = (newEndChunk + 1) * this.chunkSize - 1; // including this byte
       const endByte = Math.min(wouldEndByte, this.length - 1); // if datalength-1 is selected, this is the last block
       const shorter = wouldEndByte - endByte;
+      //console.log("WOLD", wouldEndByte, endByte, shorter, this.chunkSize - shorter)
+      //console.log("RANGE", newStartChunk, newEndChunk, startByte, endByte);
 
       byteRanges.push({
-        chunks: [startChunk, endChunk],
+        chunks: [newStartChunk, newEndChunk],
         bytes: [startByte, endByte],
         lastChunkSize: this.chunkSize - shorter,
       });
-
     }
+    console.log("ranges", byteRanges);
     if (this.logPageReads) {
       // TODO: improve log fidelity
-      const totalChunksFetched = byteRanges.reduce((a,b) => a + b.chunks[1] - b.chunks[0], 0);
+      const totalChunksFetched = byteRanges.reduce(
+        (a, b) => a + b.chunks[1] - b.chunks[0] + 1,
+        0
+      );
       this.readPages.push({
         pageno: wantedChunkRanges[0][0],
         wasCached: false,
@@ -302,10 +318,13 @@ class LazyUint8Array {
         chunks: [chunkStart, chunkEnd],
         lastChunkSize,
       } = byteRanges[rangeIdx];
+      console.log("handling res", rangeIdx, chunkStart, chunkEnd);
       for (let curChunk = chunkStart; curChunk <= chunkEnd; curChunk++) {
         const curSize = curChunk === chunkEnd ? lastChunkSize : this.chunkSize;
+        //console.log("CURS", curSize, lastChunkSize, this.chunkSize);
         const chunk = buf.subarray(bufIndex, bufIndex + curSize);
         bufIndex += curSize;
+        console.log("SETCHUNK", curChunk, chunk);
         this.chunks[curChunk] = chunk;
       }
       if (bufIndex !== buf.byteLength)
@@ -316,23 +335,20 @@ class LazyUint8Array {
   }
   /** get the given chunk from cache, throw if not cached */
   private getChunk(wantedChunkNum: number): Uint8Array {
-    let wantedChunk;
     if (typeof this.chunks[wantedChunkNum] === "undefined") {
       throw Error(
         `chunk not cached? @${wantedChunkNum} ${this.rangeMapper(0, 1).url}`
       );
     } else {
-      wantedChunk = this.chunks[wantedChunkNum];
-      if (!this.cacheRequestedChunk) delete this.chunks[wantedChunkNum];
+      return this.chunks[wantedChunkNum];
     }
-    if (!wantedChunk) throw Error(`internal error: did not read wanted chunk?`);
-    return wantedChunk;
   }
   /** verify the server supports range requests and find out file length */
   private checkServer() {
     var xhr = new XMLHttpRequest();
     const url = this.rangeMapper(0, 0).url;
     xhr.open("HEAD", url, false);
+    xhr.setRequestHeader("Accept-Encoding", "identity");
     xhr.send(null);
     if (!((xhr.status >= 200 && xhr.status < 300) || xhr.status === 304))
       throw new Error("Couldn't load " + url + ". Status: " + xhr.status);
@@ -358,7 +374,12 @@ class LazyUint8Array {
   }
   get length() {
     if (!this.serverChecked) {
-      this.checkServer();
+      try {
+        this.checkServer();
+      } catch (e) {
+        console.error("checkServer", e);
+        throw e;
+      }
     }
     return this._length!;
   }
@@ -434,5 +455,12 @@ class LazyUint8Array {
       }
     }
     throw Error("no request??");
+  }
+  public getCachedChunks() {
+    const chunks = [];
+    for(let i in this.chunks) {
+      chunks.push([+i, this.chunks[i]] as const);
+    }
+    return chunks;
   }
 }

@@ -6,6 +6,7 @@ import "./index.scss";
 import * as Comlink from "comlink";
 import type { Api, Progress } from "./worker";
 import { formatBytes } from "./util";
+import * as Base64 from "js-base64";
 
 function getWorker(): [Worker, Promise<Comlink.Remote<Api>>] {
   const worker = new Worker(new URL("./worker.ts", import.meta.url));
@@ -324,3 +325,12 @@ function Gui() {
 }
 
 render(<Gui />, document.getElementById("root"));
+
+window.dumpCache = async function () {
+  const api = await workerApi;
+  const res = await api.dumpCache();
+  return res.map(([name, chunks]) => [
+    name,
+    chunks.map(([i, chunk]) => [i, Base64.fromUint8Array(chunk)]),
+  ]);
+};

@@ -113,7 +113,7 @@ impl FetchFile {
         let entry = cache.entry(path.clone());
 
         let chunk_size = if path.ends_with(".store") {
-            16 * 1024
+            std::cmp::min(chunk_size, 16 * 1024)
         } else {
             chunk_size
         };
@@ -124,6 +124,10 @@ impl FetchFile {
                 let len = get_file_len(path.clone(), chunk_size as f64)
                     .map_err(|j| OpenReadError::FileDoesNotExist(PathBuf::from(&path)))?
                     as u64;
+                /*OpenReadError::wrap_io_error(
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", j)),
+                    PathBuf::from(&path),
+                ) */
                 let f = FetchFile {
                     path,
                     len,

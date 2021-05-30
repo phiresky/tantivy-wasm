@@ -1,0 +1,18 @@
+--- node_modules/@webassemblyjs/wasm-parser/lib/decoder.js	2021-05-19 16:44:08.085000000 +0200
++++ node_modules/@webassemblyjs/wasm-parser/lib/decoder.js	2021-05-30 21:51:51.388040619 +0200
+@@ -1666,7 +1666,7 @@
+               _metadata12.push.apply(_metadata12, _toConsumableArray(parseNameSection(_remainingBytes2)));
+             } catch (e) {
+               console.warn("Failed to decode custom \"name\" section @".concat(offset, "; ignoring (").concat(e.message, ")."));
+-              eatBytes(offset - (initialOffset + _remainingBytes2));
++offset = startLoc + sectionSizeInBytes;
+             }
+           } else if (sectionName.value === "producers") {
+             var _initialOffset = offset;
+@@ -1789,4 +1789,4 @@
+   dumpSep("end of program");
+   var module = t.module(null, moduleFields, t.moduleMetadata(moduleMetadata.sections, moduleMetadata.functionNames, moduleMetadata.localNames, moduleMetadata.producers));
+   return t.program([module]);
+-}
+\ No newline at end of file
++}

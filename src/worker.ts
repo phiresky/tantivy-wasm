@@ -69,6 +69,13 @@ const api = {
   getIndexStats(indexUrl: string, chunkSize: number): DatasetInfo {
     return JSON.parse(get_dataset_info(indexUrl, chunkSize));
   },
+  dumpCache() {
+    const fs = [];
+    for(const [name, f] of files) {
+      fs.push([name, f.getCachedChunks()] as const)
+    }
+    return fs;
+  }
 };
 export type Api = typeof api;
 Comlink.expose(api);
