@@ -27,7 +27,6 @@ const urlParams = new URLSearchParams(location.search);
 
 const chunkSize = 1024 * +(urlParams.get("chunkSize") || 32);
 
-
 console.log("chunkSize", chunkSize);
 
 const datasetUrl = "../idxes";
@@ -41,7 +40,7 @@ const datasets = [
     name: "OpenLibrary (30M books)",
     url: datasetUrl + "/tantivy-index-openlibrary",
     desc: "OpenLibrary Metadata",
-  }
+  },
 ];
 
 const myDatasetUrl = urlParams.get("dataset");
@@ -50,10 +49,9 @@ if (myDatasetUrl) {
   datasets.unshift({
     name,
     desc: name,
-    url: myDatasetUrl
+    url: myDatasetUrl,
   });
 }
-
 
 function DatasetInformation({
   datasetInfo,
@@ -122,7 +120,9 @@ function Gui() {
   const [dataset, setDataset] = useState(datasets[0].url);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState(null as string | null);
-  const [searchText, setSearchText] = useState(urlParams.get("search") || "horace slughorn");
+  const [searchText, setSearchText] = useState(
+    urlParams.get("search") || "horace slughorn"
+  );
   const [searchResult, setSearchResult] = useState([] as Doc[]);
   const [stats, setStats] = useState([] as Stat[]);
   const [datasetInfo, setDatasetInfo] = useState(null as DatasetInfo | null);
@@ -141,7 +141,7 @@ function Gui() {
         setDatasetInfo(s);
       } catch (e) {
         console.error(e);
-        setError(e);
+        setError(String(e));
       }
     })();
   }, [dataset]);
@@ -196,7 +196,13 @@ function Gui() {
       </h1>
       <div>
         Switch dataset:{" "}
-        <select value={dataset} onChange={(e) => setDataset(e.target.value)}>
+        <select
+          value={dataset}
+          onChange={(e) => {
+            setError(null);
+            setDataset(e.target.value);
+          }}
+        >
           {datasets.map((d) => (
             <option key={d.url} value={d.url}>
               {d.name}

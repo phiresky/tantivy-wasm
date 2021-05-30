@@ -3,6 +3,7 @@ use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap},
     convert::TryInto,
     io::{BufWriter, Write},
+    ops::Range,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
     u64,
@@ -23,14 +24,8 @@ use crate::console_log;
 extern "C" {
     #[wasm_bindgen(catch)]
     pub fn get_file_len(fname: String, chunkSize: f64) -> Result<f64, JsValue>;
-    pub fn read_bytes_from_file(
-        fname: String,
-        chunkSize: f64,
-        from: f64,
-        to: f64,
-        prefetch_hint: f64,
-        out: &mut [u8],
-    );
+    pub fn read_bytes_from_file(fname: String, chunkSize: f64, from: f64, to: f64, out: &mut [u8]);
+    pub fn ensure_chunks_cached(fname: String, chunkSize: f64, chunkIdxes: &[f64]);
 }
 
 #[derive(Clone, Debug)]
@@ -117,7 +112,11 @@ impl FetchFile {
             .unwrap();
         let entry = cache.entry(path.clone());
 
-        let chunk_size = if path.ends_with(".store") { 16 * 1024 } else {chunk_size};
+        let chunk_size = if path.ends_with(".store") {
+            16 * 1024
+        } else {
+            chunk_size
+        };
 
         Ok(match entry {
             Entry::Occupied(e) => (*e.get()).clone(),
@@ -126,7 +125,7 @@ impl FetchFile {
                     .map_err(|j| OpenReadError::FileDoesNotExist(PathBuf::from(&path)))?
                     as u64;
                 let f = FetchFile {
-                    path: path,
+                    path,
                     len,
                     chunk_size,
                     cache: Arc::new(RwLock::new(BTreeMap::new())), // cache: RwLock::new(BTreeMap::new()),
@@ -136,7 +135,7 @@ impl FetchFile {
             }
         })
     }
-    fn read_chunk(&self, i: Ulen, prefetch_hint: Ulen) -> Vec<u8> {
+    fn read_chunk(&self, i: Ulen) -> Vec<u8> {
         let from = i * self.chunk_size;
         let to = std::cmp::min((i + 1) * self.chunk_size, self.len());
         let mut out = vec![0; (to - from) as usize];
@@ -145,14 +144,11 @@ impl FetchFile {
             self.chunk_size as f64,
             from as f64,
             to as f64,
-            (prefetch_hint * self.chunk_size) as f64,
             &mut out,
         );
         out
     }
-}
-impl FileHandle for FetchFile {
-    fn read_bytes(&self, from: Ulen, to: Ulen) -> std::io::Result<OwnedBytes> {
+    fn get_toread_list(&self, from: Ulen, to: Ulen) -> Vec<MaybeToRead> {
         let len: usize = (to - from).try_into().unwrap();
         /*eprintln!(
             "GET {} @ {}, len {}",
@@ -165,49 +161,110 @@ impl FileHandle for FetchFile {
         let endi = to / CS;
         let startofs = (from % CS) as usize;
         let endofs = (to % CS) as usize;
-        if starti == endi {
-            // only one chunk: we can directly return a reference to the cache as an Arc (in case it is deleted from cache), no need to copy!
-            let mut cache = self.cache.write().unwrap();
-            let chunk = cache
-                .entry(starti)
-                .or_insert_with(|| OwnedBytes::new(self.read_chunk(starti, 0)));
-            return Ok(chunk.slice(startofs, endofs));
-        }
-        let mut out_buf = vec![0u8; len];
-        //let toget = vec![];
-        let mut cache = self.cache.write().unwrap();
-        let mut written = 0;
+        let mut cache = self.cache.read().unwrap();
+        let mut output = vec![];
         for i in starti..=endi {
             let startofs = if i == starti { startofs } else { 0 };
             let endofs = if i == endi { endofs } else { CS as usize };
-            let chunk = cache
-                .entry(i)
-                .or_insert_with(|| OwnedBytes::new(self.read_chunk(i, endi - i)));
-            let chunk = &chunk[startofs..endofs];
-            let write_len = std::cmp::min(chunk.len(), len as usize);
-            out_buf[written..written + write_len].copy_from_slice(&chunk);
-            written += write_len;
+            let chunk = cache.get(&i);
+            // .or_insert_with(|| OwnedBytes::new(self.read_chunk(i, endi - i)));*/
+            /*let chunk = &chunk[startofs..endofs];*/
+            let data = if let Some(chunk) = chunk {
+                let o = chunk.slice(startofs, endofs);
+                MaybeToRead::Done(o)
+            } else {
+                MaybeToRead::ToRead(i, startofs..endofs)
+            };
+            output.push(data);
         }
 
-        Ok(OwnedBytes::new(out_buf))
+        output
     }
-    /*  fn read_bytes(
+}
+enum MaybeToRead {
+    Done(OwnedBytes),
+    ToRead(u64, Range<usize>), // chunkid, range within chunk
+}
+
+fn concat_ownedbytes(obs: Vec<OwnedBytes>, chunk_size: usize) -> OwnedBytes {
+    if obs.len() == 0 {
+        return OwnedBytes::empty();
+    }
+    if obs.len() == 1 {
+        // direct reference to cache, no copying!
+        return obs[0].clone();
+    }
+    let mut v = Vec::with_capacity(obs.len() * chunk_size);
+    for o in obs {
+        v.extend_from_slice(&o[..]);
+    }
+    OwnedBytes::new(v)
+}
+impl FileHandle for FetchFile {
+    fn read_bytes_multiple(
         &self,
-        from: u64,
-        to: u64,
-    ) -> std::io::Result<tantivy::directory::OwnedBytes> {
+        ranges: &[Range<Ulen>],
+    ) -> Result<Vec<OwnedBytes>, std::io::Error> {
+        let mut toread_lists = ranges
+            .iter()
+            .map(|range| self.get_toread_list(range.start, range.end))
+            .collect::<Vec<_>>();
 
-        //let mut out = vec![0u8; (to - from) as usize];
+        let todos: Vec<&mut MaybeToRead> = toread_lists
+            .iter_mut()
+            .flatten()
+            .filter_map(|s| match s {
+                MaybeToRead::Done(x) => None,
+                toread => Some(toread),
+            })
+            .collect();
 
+        let to_cache: Vec<f64> = todos
+            .iter()
+            .map(|s| match s {
+                MaybeToRead::Done(_) => panic!(),
+                MaybeToRead::ToRead(chunk_idx, _) => *chunk_idx as f64,
+            })
+            .collect();
+        if to_cache.len() > 0 {
+            ensure_chunks_cached(self.path.clone(), self.chunk_size as f64, &to_cache);
+        }
 
-        read_bytes_from_file(
-            self.path.clone(),
-            from as f64,
-            to as f64,
-            &mut out
-        );
-        Ok(OwnedBytes::new(out))
-    }*/
+        for s in todos {
+            match s {
+                MaybeToRead::Done(_) => panic!(),
+                MaybeToRead::ToRead(chunk_idx, range) => {
+                    let chunk = OwnedBytes::new(self.read_chunk(*chunk_idx));
+                    let slice = chunk.slice(range.start, range.end);
+                    let mut c = self.cache.write().unwrap();
+                    c.insert(*chunk_idx, chunk);
+                    *s = MaybeToRead::Done(slice);
+                }
+            }
+        }
+        return Ok(toread_lists
+            .into_iter()
+            .map(|r| {
+                concat_ownedbytes(
+                    r.into_iter()
+                        .map(|t| match t {
+                            MaybeToRead::Done(d) => d,
+                            _ => panic!(),
+                        })
+                        .collect::<Vec<OwnedBytes>>(),
+                    self.chunk_size as usize,
+                )
+            })
+            .collect::<Vec<OwnedBytes>>());
+    }
+
+    fn read_bytes(&self, from: Ulen, to: Ulen) -> std::io::Result<OwnedBytes> {
+        Ok(self
+            .read_bytes_multiple(&[from..to])?
+            .into_iter()
+            .nth(0)
+            .unwrap())
+    }
 }
 impl HasLen for FetchFile {
     fn len(&self) -> u64 {

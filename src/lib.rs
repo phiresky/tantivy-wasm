@@ -1,7 +1,7 @@
 use fetch_directory::FetchDirectory;
 use serde_json::json;
 use std::fmt::Write;
-use tantivy::{Index, SegmentReader, TantivyError, collector::{DocSetCollector, TopDocs}, postings::BlockSegmentPostings, query::QueryParser, schema::{Field, FieldType}};
+use tantivy::{DocAddress, Index, SegmentReader, TantivyError, collector::{DocSetCollector, TopDocs}, postings::BlockSegmentPostings, query::QueryParser, schema::{Field, FieldType}};
 use wasm_bindgen::prelude::*;
 
 mod fetch_directory;
@@ -37,7 +37,7 @@ pub fn search(
     query: String,
 ) -> Result<String, JsValue> {
     console_error_panic_hook::set_once();
-    tantivy::set_info_log_hook(tantivyLog);
+    tantivy::set_info_log_hook(tantivyLog).ok();
     let fields: Option<Vec<String>> = fields.map(|fields| {
         fields
             .into_iter()
@@ -49,6 +49,8 @@ pub fn search(
 }
 #[wasm_bindgen]
 pub fn get_dataset_info(directory: String, chunk_size: u32) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    tantivy::set_info_log_hook(tantivyLog).ok();
     get_dataset_info_inner(directory, chunk_size as u64).map_err(to_js_err)
 }
 pub fn get_dataset_info_inner(directory: String, chunk_size: u64) -> tantivy::Result<String> {
@@ -114,14 +116,15 @@ pub fn search_inner(
         x.into_iter().map(|s| (0.0, s)).take(10).collect()
     };
 
-    for (score, doc_address) in results {
+    let read_results = searcher.doc_multiple(results.iter().map(|(_, a)| *a).collect::<Vec<DocAddress>>())?;
+
+    for ((score, doc_address), doc) in results.iter().zip(read_results) {
         console_log!(
             "found document: {}:{}",
             doc_address.segment_ord(),
             doc_address.doc()
         );
         // let score = 1;
-        let doc = searcher.doc(doc_address)?;
         // let doc: serde_json::Value = serde_json::value::to_value(schema.to_named_doc(&doc)).unwrap();
         let json: serde_json::Value = json!({
             "score": score,
